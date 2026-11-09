@@ -1,6 +1,7 @@
 use crate::config::Config;
 use anyhow::{anyhow, Context, Result};
-use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::browser::Browser;
+use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
 use chromiumoxide::cdp::browser_protocol::network::{
     CookieParam, CookieSameSite, SetCookiesParams, TimeSinceEpoch,
 };
@@ -65,27 +66,37 @@ pub async fn save_cookies(page: &Page, path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn build_browser_config(cfg: &Config, headless: bool) -> Result<BrowserConfig> {
-    let mut builder = BrowserConfig::builder();
-    if !headless {
-        builder = builder.with_head();
+pub async fn launch(
+    cfg: &Config,
+    headless: bool,
+    browser_path: Option<&str>,
+) -> Result<(Browser, tokio::task::JoinHandle<()>)> {
+    let path = browser_path
+        .map(str::to_owned)
+        .or_else(|| cfg.browser_path.clone());
+    if let Some(p) = path {
+        if !p.trim().is_empty() {
+            std::env::set_var("CLOAKBROWSER_BINARY_PATH", p);
+        }
     }
-    let mut args = cfg.browser_args.clone();
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        args.push("--ozone-platform=wayland".to_string());
-    } else if cfg!(target_os = "linux") {
-        args.push("--ozone-platform=x11".to_string());
-    }
-    for arg in args {
-        builder = builder.arg(arg);
-    }
-    builder.build().map_err(|e| anyhow!(e))
-}
 
-pub async fn launch(config: &BrowserConfig) -> Result<(Browser, tokio::task::JoinHandle<()>)> {
-    let (browser, mut handler) = Browser::launch(config.clone())
+    let mut extra_args = cfg.browser_args.clone();
+    extra_args.push("--disable-blink-features=AutomationControlled".to_string());
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        extra_args.push("--ozone-platform=wayland".to_string());
+    } else if cfg!(target_os = "linux") {
+        extra_args.push("--ozone-platform=x11".to_string());
+    }
+
+    let opts = cloak_cdp::LaunchOptions {
+        headless,
+        extra_args,
+        ..Default::default()
+    };
+    let (browser, mut handler) = cloak_cdp::launch(opts)
         .await
-        .context("failed to launch browser (is Chrome/Chromium installed?)")?;
+        .map_err(|e| anyhow!(e))
+        .context("failed to launch stealth browser via cloak-cdp")?;
     let handle = tokio::spawn(async move {
         while let Some(event) = handler.next().await {
             if let Err(e) = event {
@@ -212,29 +223,37 @@ async fn type_text(page: &Page, text: &str, delay_ms: u64) -> Result<()> {
     if !focused {
         anyhow::bail!("message input not found");
     }
-    let payload = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
-    let js = format!(
-        "(() => {{ const el = document.querySelector('[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]'); if (!el) return false; el.focus(); document.execCommand('insertText', false, {payload}); el.dispatchEvent(new InputEvent('input', {{bubbles:true}})); return true; }})()"
-    );
-    let _ = delay_ms;
-    let ok = page
-        .evaluate(js)
-        .await
-        .context("failed to type message")?
-        .into_value::<bool>()
-        .unwrap_or(false);
-    if !ok {
-        anyhow::bail!("failed to insert message text");
+    let mut rng = rand::thread_rng();
+    for ch in text.chars() {
+        page.execute(InsertTextParams::new(ch.to_string()))
+            .await
+            .context("failed to insert text")?;
+        let jitter = if delay_ms > 20 {
+            rng.gen_range(0..=(delay_ms / 3))
+        } else {
+            0
+        };
+        tokio::time::sleep(Duration::from_millis(delay_ms.saturating_add(jitter))).await;
     }
     Ok(())
 }
 
 async fn press_enter(page: &Page) -> Result<()> {
-    page.evaluate(
-        "(() => { const el = document.querySelector('[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]'); if (!el) return false; el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true})); return true; })()",
-    )
-    .await
-    .context("failed to press Enter")?;
+    let js = r#"(() => {
+        const selectors = ['[data-e2e="message-send-button"]', '[data-e2e="send-message-button"]', 'button[type="submit"]'];
+        for (const sel of selectors) {
+            const btn = document.querySelector(sel);
+            if (btn && !btn.disabled) { btn.click(); return 'clicked'; }
+        }
+        const el = document.querySelector('[data-e2e="message-input-area"] [contenteditable="true"]');
+        if (el) {
+            el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+            el.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+            return 'key';
+        }
+        return 'none';
+    })()"#;
+    page.evaluate(js).await.context("failed to send message")?;
     Ok(())
 }
 

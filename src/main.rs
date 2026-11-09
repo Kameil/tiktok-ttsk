@@ -21,6 +21,9 @@ struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
+    #[arg(long, global = true, env = "TIKTOK_TTSK_BROWSER")]
+    browser_path: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -70,6 +73,7 @@ async fn run() -> Result<()> {
     let cookies_path = data_dir.join("cookies.json");
     info!("data dir: {}", data_dir.display());
 
+    let browser_path = cli.browser_path.as_deref();
     match cli.command.unwrap_or(Command::Run {
         dry_run: false,
         headless: false,
@@ -114,7 +118,13 @@ async fn run() -> Result<()> {
             println!("messages:    {}", cfg.messages.len());
         }
         Command::Login { timeout } => {
-            do_login(&cfg, &cookies_path, Duration::from_secs(timeout)).await?;
+            do_login(
+                &cfg,
+                &cookies_path,
+                Duration::from_secs(timeout),
+                browser_path,
+            )
+            .await?;
         }
         Command::Run {
             dry_run,
@@ -140,6 +150,7 @@ async fn run() -> Result<()> {
                 dry_run,
                 headless,
                 limit,
+                browser_path,
             )
             .await?;
         }
@@ -160,13 +171,17 @@ fn init_logging(data_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-async fn do_login(cfg: &Config, cookies_path: &std::path::Path, timeout: Duration) -> Result<()> {
+async fn do_login(
+    cfg: &Config,
+    cookies_path: &std::path::Path,
+    timeout: Duration,
+    browser_path: Option<&str>,
+) -> Result<()> {
     notify::send(
         "Login required",
         "Log in on the browser. Cookies will be saved automatically.",
     );
-    let browser_cfg = browser::build_browser_config(cfg, false)?;
-    let (browser, handle) = browser::launch(&browser_cfg).await?;
+    let (browser, handle) = browser::launch(cfg, false, browser_path).await?;
     let page = browser
         .new_page("https://www.tiktok.com/login")
         .await
@@ -185,6 +200,7 @@ async fn do_login(cfg: &Config, cookies_path: &std::path::Path, timeout: Duratio
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_run(
     cfg: &Config,
     cookies_path: &std::path::Path,
@@ -193,6 +209,7 @@ async fn do_run(
     dry_run: bool,
     headless: bool,
     limit: Option<usize>,
+    browser_path: Option<&str>,
 ) -> Result<()> {
     let cookies = browser::load_cookies(cookies_path).await?;
     if cookies.is_empty() {
@@ -201,8 +218,7 @@ async fn do_run(
             cookies_path.display()
         );
     }
-    let browser_cfg = browser::build_browser_config(cfg, headless)?;
-    let (browser, handle) = browser::launch(&browser_cfg).await?;
+    let (browser, handle) = browser::launch(cfg, headless, browser_path).await?;
     let page = browser
         .new_page("about:blank")
         .await

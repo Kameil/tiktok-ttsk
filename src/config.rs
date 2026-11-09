@@ -11,6 +11,7 @@ pub struct Config {
     pub browser_args: Vec<String>,
     pub delay_between_ms: (u64, u64),
     pub typing_delay_ms: u64,
+    pub browser_path: Option<String>,
 }
 
 impl Default for Config {
@@ -29,6 +30,7 @@ impl Default for Config {
             browser_args: Vec::new(),
             delay_between_ms: (1500, 3000),
             typing_delay_ms: 120,
+            browser_path: None,
         }
     }
 }
