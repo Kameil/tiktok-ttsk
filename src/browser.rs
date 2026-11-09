@@ -245,26 +245,60 @@ async fn type_text(page: &Page, text: &str, delay_ms: u64) -> Result<()> {
     Ok(())
 }
 
-async fn press_enter(page: &Page) -> Result<()> {
+async fn press_enter(page: &Page) -> Result<bool> {
     let js = format!(
         r#"(() => {{
-        const selectors = ['[data-e2e="dm-new-send-btn"]','[data-e2e="message-send-button"]','[data-e2e="send-message-button"]','button[type="submit"]'];
+        const clickEl = (el) => {{
+            try {{
+                if (typeof el.click === 'function') {{ el.click(); return true; }}
+            }} catch (e) {{}}
+            try {{
+                el.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true,view:window}}));
+                return true;
+            }} catch (e) {{}}
+            return false;
+        }};
+        const selectors = ['[data-e2e="dm-new-send-btn"]','[data-e2e="message-send-button"]','[data-e2e="send-message-button"]','[aria-label="Enviar"]','button[type="submit"]'];
         for (const sel of selectors) {{
             const btn = document.querySelector(sel);
-            if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {{ btn.click(); return 'clicked'; }}
+            if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {{
+                if (clickEl(btn)) return 'clicked';
+            }}
         }}
         const el = document.querySelector({});
         if (el) {{
-            el.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}}));
-            el.dispatchEvent(new KeyboardEvent('keyup', {{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}}));
+            el.focus();
+            for (const type of ['keydown','keypress','keyup']) {{
+                el.dispatchEvent(new KeyboardEvent(type, {{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}}));
+            }}
             return 'key';
         }}
         return 'none';
     }})()"#,
         serde_json::to_string(MESSAGE_INPUT_SELECTOR).unwrap_or_else(|_| "\"\"".to_string())
     );
-    page.evaluate(js).await.context("failed to send message")?;
-    Ok(())
+    let res = page
+        .evaluate(js)
+        .await
+        .map(|v| {
+            v.into_value::<String>()
+                .unwrap_or_else(|_| "err".to_string())
+        })
+        .unwrap_or_else(|_| "err".to_string());
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let cleared = page
+        .evaluate(format!(
+            "(() => {{ const el = document.querySelector({}); if (!el) return true; const t = (el.innerText || el.textContent || '').trim(); return t.length === 0; }})()",
+            serde_json::to_string(MESSAGE_INPUT_SELECTOR).unwrap_or_else(|_| "\"\"".to_string())
+        ))
+        .await
+        .ok()
+        .and_then(|v| v.into_value::<bool>().ok())
+        .unwrap_or(false);
+    if cleared || res == "clicked" || res == "key" {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 pub async fn send_streak_messages(
@@ -307,9 +341,12 @@ pub async fn send_streak_messages(
             } else {
                 type_text(page, &msg, cfg.typing_delay_ms).await?;
                 tokio::time::sleep(Duration::from_millis(350)).await;
-                press_enter(page).await?;
-                info!("[{}/{}] sent {:?}", i + 1, target, msg);
-                sent += 1;
+                if press_enter(page).await? {
+                    info!("[{}/{}] sent {:?}", i + 1, target, msg);
+                    sent += 1;
+                } else {
+                    anyhow::bail!("message was typed but send action was not confirmed");
+                }
             }
             let (min_d, max_d) = cfg.delay_between_ms;
             let delay = if max_d > min_d {

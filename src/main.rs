@@ -9,7 +9,7 @@ use config::Config;
 use state::State;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -162,7 +162,9 @@ fn init_logging(data_dir: &std::path::Path) -> Result<()> {
     let file_appender = tracing_appender::rolling::never(data_dir, "app.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     std::mem::forget(guard);
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,chromiumoxide::conn=off,chromiumoxide::handler=off")
+    });
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(non_blocking)
@@ -229,13 +231,23 @@ async fn do_run(
 
     let sent = browser::send_streak_messages(&page, cfg, dry_run, limit).await?;
     if !dry_run {
-        st.mark_sent_today();
-        st.save(state_path)?;
+        if sent > 0 {
+            st.mark_sent_today();
+            st.save(state_path)?;
+            notify::send(
+                "Streak messages sent",
+                &format!("Processed {sent} conversation(s)."),
+            );
+            println!("processed {sent} conversation(s)");
+        } else {
+            warn!("no messages were sent; daily state was not updated");
+            notify::send(
+                "No messages sent",
+                "The run finished but no messages were confirmed as sent.",
+            );
+            println!("processed 0 conversation(s); state not updated");
+        }
         browser::save_cookies(&page, cookies_path).await.ok();
-        notify::send(
-            "Streak messages sent",
-            &format!("Processed {sent} conversation(s)."),
-        );
     } else {
         println!("dry-run complete: {sent} conversation(s) would be processed");
     }
