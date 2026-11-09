@@ -2,7 +2,7 @@ use crate::config::Config;
 use anyhow::{anyhow, Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::network::{
-    CookieParam, CookieSameSite, SetCookiesParams,
+    CookieParam, CookieSameSite, SetCookiesParams, TimeSinceEpoch,
 };
 use chromiumoxide::cdp::browser_protocol::page::NavigateParams;
 use chromiumoxide::Page;
@@ -109,7 +109,7 @@ pub async fn apply_cookies(page: &Page, cookies: &[SavedCookie]) -> Result<()> {
             p.secure = Some(c.secure);
             p.http_only = Some(c.http_only);
             if let Some(exp) = c.expires {
-                p.expires = Some(exp);
+                p.expires = Some(TimeSinceEpoch::new(exp));
             }
             if let Some(ss) = &c.same_site {
                 p.same_site = match ss.as_str() {
@@ -202,9 +202,7 @@ async fn click_nth(page: &Page, selector: &str, index: usize) -> Result<()> {
 }
 
 async fn type_text(page: &Page, text: &str, delay_ms: u64) -> Result<()> {
-    let js = format!(
-        "(() => {{ const el = document.querySelector('[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]'); if (!el) return false; el.focus(); return true; }})()"
-    );
+    let js = "(() => { const el = document.querySelector('[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]'); if (!el) return false; el.focus(); return true; })()";
     let focused = page
         .evaluate(js)
         .await
@@ -246,7 +244,12 @@ pub async fn send_streak_messages(
     dry_run: bool,
     limit: Option<usize>,
 ) -> Result<usize> {
-    wait_for_selector(page, "[data-e2e=\"chat-list-item\"]", Duration::from_secs(30)).await?;
+    wait_for_selector(
+        page,
+        "[data-e2e=\"chat-list-item\"]",
+        Duration::from_secs(30),
+    )
+    .await?;
     let count_js = "document.querySelectorAll('[data-e2e=\"chat-list-item\"]').length";
     let total = page
         .evaluate(count_js)

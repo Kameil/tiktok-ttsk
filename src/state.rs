@@ -25,7 +25,8 @@ impl State {
             std::fs::create_dir_all(parent)?;
         }
         let raw = serde_json::to_string_pretty(self).context("failed to serialize state")?;
-        std::fs::write(path, raw).with_context(|| format!("failed to write state: {}", path.display()))?;
+        std::fs::write(path, raw)
+            .with_context(|| format!("failed to write state: {}", path.display()))?;
         Ok(())
     }
 
@@ -43,5 +44,10 @@ impl State {
 
 pub fn today_local() -> String {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    format!("{:04}-{:02}-{:02}", now.year(), now.month() as u8, now.day())
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        now.month() as u8,
+        now.day()
+    )
 }

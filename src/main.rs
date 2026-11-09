@@ -9,7 +9,7 @@ use config::Config;
 use state::State;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -64,9 +64,7 @@ async fn run() -> Result<()> {
     };
     init_logging(&data_dir)?;
 
-    let config_path = cli
-        .config
-        .unwrap_or_else(|| data_dir.join("config.toml"));
+    let config_path = cli.config.unwrap_or_else(|| data_dir.join("config.toml"));
     let cfg = Config::load(&config_path)?;
     let state_path = data_dir.join("state.json");
     let cookies_path = data_dir.join("cookies.json");
@@ -89,10 +87,29 @@ async fn run() -> Result<()> {
         Command::Status => {
             let st = State::load(&state_path)?;
             println!("data_dir:    {}", data_dir.display());
-            println!("config:      {} ({})", config_path.display(), if config_path.exists() { "found" } else { "missing, using defaults" });
-            println!("cookies:     {} ({})", cookies_path.display(), if cookies_path.exists() { "found" } else { "missing" });
+            println!(
+                "config:      {} ({})",
+                config_path.display(),
+                if config_path.exists() {
+                    "found"
+                } else {
+                    "missing, using defaults"
+                }
+            );
+            println!(
+                "cookies:     {} ({})",
+                cookies_path.display(),
+                if cookies_path.exists() {
+                    "found"
+                } else {
+                    "missing"
+                }
+            );
             println!("state:       {}", state_path.display());
-            println!("last_sent:   {}", st.last_sent_date.as_deref().unwrap_or("never"));
+            println!(
+                "last_sent:   {}",
+                st.last_sent_date.as_deref().unwrap_or("never")
+            );
             println!("sent_today:  {}", st.sent_today());
             println!("messages:    {}", cfg.messages.len());
         }
@@ -115,7 +132,16 @@ async fn run() -> Result<()> {
                 println!("already sent today (use --force to override)");
                 return Ok(());
             }
-            do_run(&cfg, &cookies_path, &state_path, &mut st, dry_run, headless, limit).await?;
+            do_run(
+                &cfg,
+                &cookies_path,
+                &state_path,
+                &mut st,
+                dry_run,
+                headless,
+                limit,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -135,16 +161,24 @@ fn init_logging(data_dir: &std::path::Path) -> Result<()> {
 }
 
 async fn do_login(cfg: &Config, cookies_path: &std::path::Path, timeout: Duration) -> Result<()> {
-    notify::send("Login required", "Log in on the browser. Cookies will be saved automatically.");
+    notify::send(
+        "Login required",
+        "Log in on the browser. Cookies will be saved automatically.",
+    );
     let browser_cfg = browser::build_browser_config(cfg, false)?;
     let (browser, handle) = browser::launch(&browser_cfg).await?;
-    let page = browser.new_page("https://www.tiktok.com/login").await
+    let page = browser
+        .new_page("https://www.tiktok.com/login")
+        .await
         .context("failed to open login page")?;
     browser::wait_for_login(&page, timeout).await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     browser::save_cookies(&page, cookies_path).await?;
     info!("cookies saved to {}", cookies_path.display());
-    notify::send("Login successful", "Cookies saved. Run `tiktok-ttsk run` to send messages.");
+    notify::send(
+        "Login successful",
+        "Cookies saved. Run `tiktok-ttsk run` to send messages.",
+    );
     println!("cookies saved: {}", cookies_path.display());
     drop(browser);
     handle.abort();
@@ -182,7 +216,10 @@ async fn do_run(
         st.mark_sent_today();
         st.save(state_path)?;
         browser::save_cookies(&page, cookies_path).await.ok();
-        notify::send("Streak messages sent", &format!("Processed {sent} conversation(s)."));
+        notify::send(
+            "Streak messages sent",
+            &format!("Processed {sent} conversation(s)."),
+        );
     } else {
         println!("dry-run complete: {sent} conversation(s) would be processed");
     }

@@ -40,8 +40,8 @@ impl Config {
         }
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
-        let cfg: Self =
-            toml::from_str(&raw).with_context(|| format!("failed to parse config: {}", path.display()))?;
+        let cfg: Self = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config: {}", path.display()))?;
         if cfg.messages.is_empty() {
             anyhow::bail!("config.messages must not be empty");
         }
