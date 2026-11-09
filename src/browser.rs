@@ -14,6 +14,10 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+const CONVERSATION_SELECTOR: &str =
+    "[data-e2e=\"chat-list-item\"], [data-e2e=\"dm-new-conversation-item\"]";
+const MESSAGE_INPUT_SELECTOR: &str = "[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedCookie {
     pub name: String,
@@ -159,7 +163,7 @@ pub async fn wait_for_login(page: &Page, timeout: Duration) -> Result<()> {
             && url.contains("tiktok.com")
             && url != "https://www.tiktok.com/"
             && !url.is_empty();
-        let dom_ok = element_exists(page, "[data-e2e=\"chat-list-item\"]").await?
+        let dom_ok = element_exists(page, CONVERSATION_SELECTOR).await?
             || element_exists(page, "[data-e2e=\"recommend-list-item-container\"]").await?
             || element_exists(page, "[data-e2e=\"browse-video\"]").await?;
         if url_ok || dom_ok {
@@ -213,7 +217,10 @@ async fn click_nth(page: &Page, selector: &str, index: usize) -> Result<()> {
 }
 
 async fn type_text(page: &Page, text: &str, delay_ms: u64) -> Result<()> {
-    let js = "(() => { const el = document.querySelector('[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]'); if (!el) return false; el.focus(); return true; })()";
+    let js = format!(
+        "(() => {{ const el = document.querySelector({}); if (!el) return false; el.focus(); return true; }})()",
+        serde_json::to_string(MESSAGE_INPUT_SELECTOR).unwrap_or_else(|_| "\"\"".to_string())
+    );
     let focused = page
         .evaluate(js)
         .await
@@ -239,20 +246,23 @@ async fn type_text(page: &Page, text: &str, delay_ms: u64) -> Result<()> {
 }
 
 async fn press_enter(page: &Page) -> Result<()> {
-    let js = r#"(() => {
-        const selectors = ['[data-e2e="message-send-button"]', '[data-e2e="send-message-button"]', 'button[type="submit"]'];
-        for (const sel of selectors) {
+    let js = format!(
+        r#"(() => {{
+        const selectors = ['[data-e2e="dm-new-send-btn"]','[data-e2e="message-send-button"]','[data-e2e="send-message-button"]','button[type="submit"]'];
+        for (const sel of selectors) {{
             const btn = document.querySelector(sel);
-            if (btn && !btn.disabled) { btn.click(); return 'clicked'; }
-        }
-        const el = document.querySelector('[data-e2e="message-input-area"] [contenteditable="true"]');
-        if (el) {
-            el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
-            el.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+            if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {{ btn.click(); return 'clicked'; }}
+        }}
+        const el = document.querySelector({});
+        if (el) {{
+            el.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}}));
+            el.dispatchEvent(new KeyboardEvent('keyup', {{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}}));
             return 'key';
-        }
+        }}
         return 'none';
-    })()"#;
+    }})()"#,
+        serde_json::to_string(MESSAGE_INPUT_SELECTOR).unwrap_or_else(|_| "\"\"".to_string())
+    );
     page.evaluate(js).await.context("failed to send message")?;
     Ok(())
 }
@@ -263,13 +273,11 @@ pub async fn send_streak_messages(
     dry_run: bool,
     limit: Option<usize>,
 ) -> Result<usize> {
-    wait_for_selector(
-        page,
-        "[data-e2e=\"chat-list-item\"]",
-        Duration::from_secs(30),
-    )
-    .await?;
-    let count_js = "document.querySelectorAll('[data-e2e=\"chat-list-item\"]').length";
+    wait_for_selector(page, CONVERSATION_SELECTOR, Duration::from_secs(30)).await?;
+    let count_js = format!(
+        "document.querySelectorAll({}).length",
+        serde_json::to_string(CONVERSATION_SELECTOR).unwrap_or_else(|_| "\"\"".to_string())
+    );
     let total = page
         .evaluate(count_js)
         .await
@@ -286,13 +294,8 @@ pub async fn send_streak_messages(
     let mut rng = rand::thread_rng();
     for i in 0..target {
         let result: Result<()> = async {
-            click_nth(page, "[data-e2e=\"chat-list-item\"]", i).await?;
-            wait_for_selector(
-                page,
-                "[data-e2e=\"message-input-area\"] [contenteditable=\"true\"]",
-                Duration::from_secs(15),
-            )
-            .await?;
+            click_nth(page, CONVERSATION_SELECTOR, i).await?;
+            wait_for_selector(page, MESSAGE_INPUT_SELECTOR, Duration::from_secs(15)).await?;
             tokio::time::sleep(Duration::from_millis(500)).await;
             let msg = cfg
                 .messages
